@@ -4,7 +4,7 @@
     "slug": "SellSnap",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/sellsnap_icon.jpeg",
+    "icon": "./assets/images/icon.png",
     "scheme": "sellsnap",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
@@ -15,10 +15,10 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/sellsnap_icon.jpeg",
+        "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true
+      "package": "com.abdalmoumen.sellsnap"
     },
     "web": {
       "bundler": "metro",
