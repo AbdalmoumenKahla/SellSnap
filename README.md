@@ -2,43 +2,72 @@
 
 **SellSnap** is a modern, professional sales management system built with React Native and Expo, designed specifically for Arabic-speaking users with full RTL (Right-to-Left) support.
 
-![SellSnap App](./assets/images/icon.png)
+![SellSnap App](./assets/images/sellsnap_icon.jpeg)
 
-## ✨ Features
+## ✨ Latest Features & Updates
 
-### 👥 **Customer Management**
-- ✅ Professional customer dashboard with card-based layouts
-- ✅ Add, edit, delete, and search customers
-- ✅ Real-time customer search with Arabic support
-- ✅ Customer avatar system with initials
-- ✅ Confirmation dialogs for safe deletion
+### 🎨 **Modern UI Enhancements**
+- ✅ **Modernized Button Design**: Pill-shaped buttons with enhanced shadows and gradients
+- ✅ **Professional Color Schemes**: Updated with modern purple gradients and improved visual hierarchy
+- ✅ **Responsive Layouts**: 40% width buttons with center alignment for better proportions
+- ✅ **Enhanced Filter Buttons**: Modern pill designs with color-matched shadows (25-30px radius)
+- ✅ **Optimized Touch Targets**: Improved button sizes and spacing for better mobile experience
 
-### 📦 **Inventory Management**
-- ✅ Add items with images, prices, and piece counts
-- ✅ Update item information and images
-- ✅ Delete items with confirmation
-- ✅ Image picker integration for product photos
-- ✅ Professional grid layout for items display
+### 📊 **Enhanced Sales History**
+- ✅ **Detailed Item Breakdown**: Shows individual item prices with format "Item[UnitPrice] x Quantity = Total"
+- ✅ **Improved Price Display**: Clear pricing transparency for each transaction
+- ✅ **Better Data Parsing**: Enhanced format handling for "Item: X قطعة" storage format
+- ✅ **Professional History Cards**: Elevated design with proper spacing and visual hierarchy
 
-### 💰 **Sales Processing**
-- ✅ Customer-specific quantity tracking
-- ✅ Real-time total calculation
-- ✅ Easy increment/decrement controls
-- ✅ Save sales to history with timestamps
-- ✅ Reset quantities after sale completion
+### 🖼️ **Image System Improvements**
+- ✅ **Dynamic Image Sizing**: AspectRatio-based sizing that fits image content
+- ✅ **Image Caching**: Pre-processed image sources to prevent refresh issues
+- ✅ **Stable Rendering**: Eliminated image flickering and re-mounting problems
+- ✅ **Performance Optimization**: Enhanced memo components with stable keys
 
-### 📊 **Sales History & Analytics**
-- ✅ Complete sales history with detailed records
-- ✅ Advanced filtering system:
-  - Search by customer name
-  - **Scrollable date picker** (Year/Month/Day)
+### 📱 **Stock Management Redesign**
+- ✅ **Repositioned Add Button**: Moved from top-left to bottom-center above back button
+- ✅ **Improved Layout Flow**: Better visual hierarchy and user experience
+- ✅ **Modern Button Styling**: 70% width with pill shape and green shadows
+- ✅ **Consistent Navigation**: Unified button placement across all dashboards
+
+## ✨ Core Features
+
+### � **Customer Management**
+- ✅ Professional customer dashboard with modern card-based layouts
+- ✅ Add, edit, delete, and search customers with confirmation dialogs
+- ✅ Real-time customer search with full Arabic RTL support
+- ✅ Modern "Add Customer" button with purple gradient and pill design
+
+### 📦 **Advanced Inventory Management**
+- ✅ Complete CRUD operations for items with images, prices, and stock quantities
+- ✅ Professional grid layout (2-column) with optimized image containers
+- ✅ Image picker integration with validation and error handling
+- ✅ Stock quantity tracking and low-stock management
+- ✅ Modern add/edit interfaces with improved styling
+
+### 🛍️ **Smart Display Management**
+- ✅ Select which items to display to customers
+- ✅ Visual selection indicators with checkmarks
+- ✅ Toggle-based item management
+- ✅ Real-time display updates
+
+### 💰 **Professional Sales Processing**
+- ✅ 3-column grid layout for product selection
+- ✅ Real-time quantity controls with stock validation
+- ✅ Dynamic total calculation with proper formatting
+- ✅ Customer-specific sales workflows
+- ✅ Complete sales history with timestamps
+
+### 📊 **Enhanced Sales History & Analytics**
+- ✅ **Advanced Item Display**: "ItemName[UnitPrice] x Quantity = Total شيكل"
+- ✅ **Comprehensive Filtering**:
+  - Real-time customer name search
+  - Professional scrollable date picker (Year/Month/Day)
   - Combined search and date filtering
-- ✅ Date-based deletion system:
-  - Delete by year only
-  - Delete by year + month
-  - Delete by specific date
-- ✅ Professional card-based history display
-- ✅ Empty state handling with helpful messages
+- ✅ **Modern Filter Interface**: Pill-shaped buttons with color-coded shadows
+- ✅ **Bulk Deletion System**: Delete by year, month, or specific date
+- ✅ **Professional Cards**: Enhanced visual design with proper spacing
 
 ### 🎨 **User Experience**
 - ✅ **Arabic RTL Interface** - Complete right-to-left support
