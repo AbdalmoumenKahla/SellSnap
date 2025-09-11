@@ -2,7 +2,7 @@
 
 **SellSnap** is a modern, professional sales management system built with React Native and Expo, designed specifically for Arabic-speaking users with full RTL (Right-to-Left) support.
 
-![SellSnap App](./assets/images/sellsnap_icon.jpeg)
+![SellSnap App](./assets/images/sellsnap_icon.png)
 
 ## ✨ Latest Features & Updates
 
