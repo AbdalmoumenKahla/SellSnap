@@ -1,4 +1,4 @@
-﻿import { Picker } from '@react-native-picker/picker';
+import { Picker } from '@react-native-picker/picker';
 import * as ImagePicker from 'expo-image-picker';
 import * as SQLite from 'expo-sqlite';
 import React from 'react';
@@ -62,6 +62,14 @@ export default function HomeScreen() {
   const [currentSaleItems, setCurrentSaleItems] = React.useState<{[itemId: number]: number}>({});
   const [currentSaleTotal, setCurrentSaleTotal] = React.useState(0);
   
+  // Create a ref to hold the current items state for stable access
+  const itemsRef = React.useRef<Item[]>(items);
+  
+  // Update the ref whenever items change
+  React.useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
+  
   // States for editing items
   const [editingItem, setEditingItem] = React.useState<Item | null>(null);
   const [editModalVisible, setEditModalVisible] = React.useState(false);
@@ -89,7 +97,7 @@ export default function HomeScreen() {
   const [showDateFilterModal, setShowDateFilterModal] = React.useState(false);
 
   // Database operations
-  const loadCustomers = () => {
+  const loadCustomers = React.useCallback(() => {
     try {
       const rows = db.getAllSync('SELECT * FROM customers;');
       setCustomers(rows as Customer[] ?? []);
@@ -97,7 +105,7 @@ export default function HomeScreen() {
       console.error('Error loading customers:', error);
       setCustomers([]);
     }
-  };
+  }, [db]);
 
   const loadAllItems = () => {
     try {
@@ -129,7 +137,6 @@ export default function HomeScreen() {
   const loadSalesHistory = () => {
     try {
       const rows = db.getAllSync('SELECT * FROM sales_history ORDER BY date DESC;');
-      console.log('Loaded sales history:', rows);
       
       // If no sales history exists, add a sample entry for testing
       if (rows.length === 0) {
@@ -140,8 +147,14 @@ export default function HomeScreen() {
         setFilteredSalesHistory(historyData);
       } else {
         const historyData = rows as SalesHistory[] ?? [];
-        setSalesHistory(historyData);
-        setFilteredSalesHistory(historyData);
+        // Ensure proper sorting by timestamp (newest first)
+        const sortedData = historyData.sort((a, b) => {
+          const dateA = new Date(a.date);
+          const dateB = new Date(b.date);
+          return dateB.getTime() - dateA.getTime();
+        });
+        setSalesHistory(sortedData);
+        setFilteredSalesHistory(sortedData);
       }
     } catch (error) {
       setSalesHistory([]);
@@ -159,16 +172,14 @@ export default function HomeScreen() {
       });
       
       setDisplayItems(displayItemsMap);
-      console.log('Display items loaded:', displayItemsMap);
-      console.log('Total display items:', Object.keys(displayItemsMap).length);
     } catch (error) {
       console.error('Error loading display items:', error);
       setDisplayItems({});
     }
   };
 
-  // Sales workflow functions
-  const toggleDisplayItem = (itemId: number) => {
+  // Sales workflow functions - memoized to prevent re-renders
+  const toggleDisplayItem = React.useCallback((itemId: number) => {
     const newDisplayState = !displayItems[itemId];
     
     // Update state
@@ -192,7 +203,6 @@ export default function HomeScreen() {
           [itemId]
         );
       }
-      console.log(`Display item ${itemId} ${newDisplayState ? 'added to' : 'removed from'} display`);
     } catch (error) {
       console.error('Error saving display item:', error);
       // Revert state change on error
@@ -201,18 +211,19 @@ export default function HomeScreen() {
         [itemId]: !newDisplayState
       }));
     }
-  };
+  }, [displayItems, db]);
 
-  const updateSaleItemQuantity = (itemId: number, newQuantity: number) => {
+  const updateSaleItemQuantity = React.useCallback((itemId: number, newQuantity: number) => {
     if (newQuantity < 0) return;
-    
-    // Find the item to get the price
-    const item = items.find(i => i.id === itemId);
-    if (!item) return;
     
     // Update both states using functional updates to avoid race conditions
     setCurrentSaleItems(prev => {
       const currentQuantity = prev[itemId] || 0;
+      
+      // Calculate price using items directly from state
+      const item = items.find(i => i.id === itemId);
+      if (!item) return prev;
+      
       const quantityDiff = newQuantity - currentQuantity;
       
       // Update the total based on the difference
@@ -226,7 +237,37 @@ export default function HomeScreen() {
       }
       return updated;
     });
-  };
+  }, []); // Remove items dependency to make it truly stable
+
+  // Create truly stable reference for the update function with empty deps
+  const stableUpdateQuantity = React.useCallback((itemId: number, newQuantity: number) => {
+    if (newQuantity < 0) return;
+    
+    // Use setCurrentSaleItems with functional update to access current items
+    setCurrentSaleItems(prev => {
+      const currentQuantity = prev[itemId] || 0;
+      const quantityDiff = newQuantity - currentQuantity;
+      
+      // Calculate price using the latest items state through a ref or direct access
+      // Get fresh items data by accessing current state
+      const currentItems = itemsRef.current || [];
+      const currentItem = currentItems.find((i: Item) => i.id === itemId);
+      if (!currentItem) {
+        return prev;
+      }
+      
+      // Update the total based on the difference
+      setCurrentSaleTotal(prevTotal => prevTotal + (quantityDiff * currentItem.price));
+      
+      const updated = { ...prev };
+      if (newQuantity === 0) {
+        delete updated[itemId];
+      } else {
+        updated[itemId] = newQuantity;
+      }
+      return updated;
+    });
+  }, []); // Empty dependency array for true stability
 
   const saveSale = async () => {
     if (!selectedCustomer) {
@@ -278,11 +319,11 @@ export default function HomeScreen() {
         })
         .join(', ');
 
-      // Save to sales history
-      const saleDate = new Date().toISOString().split('T')[0];
+      // Save to sales history with full timestamp
+      const saleDateTime = new Date().toISOString();
       db.runSync(
         'INSERT INTO sales_history (customer_name, items, total, date) VALUES (?, ?, ?, ?);',
-        [selectedCustomer.name, saleDescription, currentSaleTotal, saleDate]
+        [selectedCustomer.name, saleDescription, currentSaleTotal, saleDateTime]
       );
 
       // Reset sale state
@@ -336,7 +377,6 @@ export default function HomeScreen() {
   
 
   const handleDeleteYearChange = React.useCallback((value: string) => {
-    console.log('Delete year changed:', value);
     setDeleteYear(value);
     // Clear month and day when year changes
     setDeleteMonth('');
@@ -344,14 +384,12 @@ export default function HomeScreen() {
   }, []);
 
   const handleDeleteMonthChange = React.useCallback((value: string) => {
-    console.log('Delete month changed:', value);
     setDeleteMonth(value);
     // Clear day when month changes
     setDeleteDay('');
   }, []);
 
   const handleDeleteDayChange = React.useCallback((value: string) => {
-    console.log('Delete day changed:', value);
     setDeleteDay(value);
   }, []);
 
@@ -395,12 +433,28 @@ export default function HomeScreen() {
     setFilterYear('');
     setFilterMonth('');
     setFilterDay('');
-  }, []);
+    // Reset to original sales history sorted by date+time descending
+    const sortedHistory = [...salesHistory].sort((a, b) => {
+      const dateA = new Date(a.date);
+      const dateB = new Date(b.date);
+      return dateB.getTime() - dateA.getTime(); // Newest first
+    });
+    setFilteredSalesHistory(sortedHistory);
+  }, [salesHistory]);
 
   const handleDeleteSingleHistory = React.useCallback((historyItem: SalesHistory) => {
+    const formattedDate = new Date(historyItem.date).toLocaleString('ar-EG', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    });
+    
     Alert.alert(
       'تأكيد الحذف',
-      `هل تريد حذف عملية البيع للعميل "${historyItem.customer_name}" بتاريخ ${historyItem.date}؟`,
+      `هل تريد حذف عملية البيع للعميل "${historyItem.customer_name}" بتاريخ ${formattedDate}؟`,
       [
         { text: 'إلغاء', style: 'cancel' },
         {
@@ -512,6 +566,13 @@ export default function HomeScreen() {
       });
     }
 
+    // Ensure filtered results are sorted by date+time in descending order (newest first)
+    filtered.sort((a, b) => {
+      const dateA = new Date(a.date);
+      const dateB = new Date(b.date);
+      return dateB.getTime() - dateA.getTime(); // Descending order (newest first)
+    });
+
     return filtered;
   }, [salesHistory, filterCustomerName, filterYear, filterMonth, filterDay]);
 
@@ -532,7 +593,6 @@ export default function HomeScreen() {
     }
 
     try {
-      console.log('Starting to update item...');
       const pieces = parseInt(editPieces) || 1;
       const stockQuantity = parseInt(editStockQuantity) || 0;
       
@@ -546,9 +606,7 @@ export default function HomeScreen() {
           editingItem.id
         ]
       );
-      console.log('Database update completed');
       
-      console.log('Clearing form fields...');
       setEditModalVisible(false);
       setEditingItem(null);
       setEditName('');
@@ -556,9 +614,7 @@ export default function HomeScreen() {
       setEditPieces('');
       setEditStockQuantity('');
       
-      console.log('Reloading items...');
       loadAllItems();
-      console.log('Items reloaded');
       
       Alert.alert('نجح', 'تم تحديث الصنف بنجاح');
     } catch (error) {
@@ -594,8 +650,8 @@ export default function HomeScreen() {
     );
   }, []);
 
-  // Delete customer
-  const handleDeleteCustomer = (customer: Customer) => {
+  // Delete customer - memoized to prevent re-renders
+  const handleDeleteCustomer = React.useCallback((customer: Customer) => {
     Alert.alert(
       'تأكيد الحذف',
       `هل تريد حذف العميل "${customer.name}"؟`,
@@ -617,27 +673,22 @@ export default function HomeScreen() {
         }
       ]
     );
-  };
+  }, [db, loadCustomers]);
 
   // Add new item
   const handleAddNewItem = React.useCallback(async () => {
     if (newItemName.trim() && newItemPrice.trim()) {
       try {
-        console.log('Starting to add new item...');
         const imageUri = newItemImage ? JSON.stringify(newItemImage) : null;
-        console.log('Image data prepared:', imageUri);
         
         const pieces = parseInt(newItemPieces) || 1;
         const stockQuantity = parseInt(newItemStockQuantity) || 0;
         
-        console.log('Inserting into database...');
         db.runSync(
           'INSERT INTO items (name, price, image, pieces, stock_quantity) VALUES (?, ?, ?, ?, ?);',
           [newItemName.trim(), parseFloat(newItemPrice), imageUri, pieces, stockQuantity]
         );
-        console.log('Database insert completed');
         
-        console.log('Clearing form fields...');
         setNewItemName('');
         setNewItemPrice('');
         setNewItemPieces('');
@@ -645,9 +696,7 @@ export default function HomeScreen() {
         setNewItemImage(null);
         setAddItemModalVisible(false);
         
-        console.log('Reloading items...');
         loadAllItems();
-        console.log('Items reloaded');
         
         Alert.alert('نجح', 'تم إضافة الصنف بنجاح');
       } catch (error) {
@@ -689,8 +738,6 @@ export default function HomeScreen() {
   // Pick image
   const pickImageForNewItem = React.useCallback(async () => {
     try {
-      console.log('Starting image picker...');
-      
       // Request permissions
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== 'granted') {
@@ -698,7 +745,6 @@ export default function HomeScreen() {
         return;
       }
 
-      console.log('Launching image library...');
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: 'images',
         allowsEditing: true,
@@ -706,22 +752,15 @@ export default function HomeScreen() {
         quality: 0.5,
       });
 
-      console.log('Image picker result:', result);
-
       if (!result.canceled && result.assets && result.assets[0]) {
-        console.log('Setting new item image...');
         const imageUri = result.assets[0].uri;
         
         // Validate the URI before setting
         if (imageUri && (imageUri.startsWith('file://') || imageUri.startsWith('content://') || imageUri.startsWith('http'))) {
           setNewItemImage({ uri: imageUri });
-          console.log('Image set successfully:', imageUri);
         } else {
-          console.error('Invalid image URI:', imageUri);
           Alert.alert('خطأ', 'صيغة الصورة غير صحيحة');
         }
-      } else {
-        console.log('Image picker was canceled or no assets found');
       }
     } catch (error) {
       console.error('Error picking image:', error);
@@ -737,17 +776,12 @@ export default function HomeScreen() {
     }
 
     try {
-      console.log('Starting to add new customer...');
       await db.runAsync('INSERT INTO customers (name) VALUES (?)', [newCustomerName.trim()]);
-      console.log('Database insert completed');
       
-      console.log('Clearing form fields...');
       setNewCustomerName('');
       setAddNewCustomerModalVisible(false);
       
-      console.log('Reloading customers...');
       await loadCustomers();
-      console.log('Customers reloaded');
       
       Alert.alert('نجح', 'تم إضافة العميل بنجاح');
     } catch (error) {
@@ -756,8 +790,8 @@ export default function HomeScreen() {
     }
   }, [newCustomerName]);
 
-  // Render functions (old - will be replaced)
-  const renderCustomerItem = ({ item }: { item: Customer }) => (
+  // Render functions - memoized to prevent re-creation
+  const renderCustomerItem = React.useCallback(({ item }: { item: Customer }) => (
     <View style={styles.customerItem}>
       <TouchableOpacity
         style={styles.customerContent}
@@ -778,7 +812,7 @@ export default function HomeScreen() {
         <Text style={styles.customerID}>العميل رقم: {item.id}</Text>
       </TouchableOpacity>
     </View>
-  );
+  ), [currentView]);
 
 
   const renderHistoryItem = ({ item }: { item: SalesHistory }) => {
@@ -823,7 +857,16 @@ export default function HomeScreen() {
     return (
       <View style={styles.historyItem}>
         <View style={styles.historyItemHeader}>
-          <Text style={styles.historyDate}>{item.date}</Text>
+          <Text style={styles.historyDate}>
+            {new Date(item.date).toLocaleString('ar-EG', {
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: true
+            })}
+          </Text>
           <Text style={styles.historyCustomer}>{item.customer_name}</Text>
           <TouchableOpacity
             style={styles.historyDeleteButton}
@@ -911,7 +954,7 @@ export default function HomeScreen() {
     currentQuantity: number;
     onUpdateQuantity: (itemId: number, newQuantity: number) => void;
   }) => {
-    // Memoize button handlers with stable dependencies
+     
     const handleDecrement = React.useCallback(() => {
       if (currentQuantity > 0) {
         onUpdateQuantity(item.id, currentQuantity - 1);
@@ -926,17 +969,13 @@ export default function HomeScreen() {
       }
     }, [item.id, item.stock_quantity, currentQuantity, onUpdateQuantity]);
 
-    // Memoize the image key to prevent re-renders
-    const imageKey = React.useMemo(() => `item-${item.id}-${item.name}`, [item.id, item.name]);
-
     return (
       <View style={styles.saleItemCard}>
         <Image 
-          key={imageKey} // Stable key to prevent re-mounting
           source={imageSource} 
           style={styles.saleItemImage}
-          fadeDuration={0} // No fade animation
-          resizeMode="contain" // Explicit resize mode
+          fadeDuration={0}
+          resizeMode="contain"
         />
         <View style={styles.saleItemDetails}>
           <Text style={styles.saleItemName} numberOfLines={2}>{item.name}</Text>
@@ -948,9 +987,10 @@ export default function HomeScreen() {
           <TouchableOpacity 
             style={styles.saleQuantityButton}
             onPress={handleDecrement}
-            activeOpacity={0.7}
+            activeOpacity={0.6}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
-            <Text style={styles.saleQuantityButtonText}>-</Text>
+            <Text style={styles.saleQuantityButtonText} pointerEvents="none">-</Text>
           </TouchableOpacity>
           
           <Text style={styles.saleQuantityText}>{currentQuantity}</Text>
@@ -958,71 +998,43 @@ export default function HomeScreen() {
           <TouchableOpacity 
             style={styles.saleQuantityButton}
             onPress={handleIncrement}
-            activeOpacity={0.7}
+            activeOpacity={0.6}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
-            <Text style={styles.saleQuantityButtonText}>+</Text>
+            <Text style={styles.saleQuantityButtonText} pointerEvents="none">+</Text>
           </TouchableOpacity>
         </View>
       </View>
     );
   }, (prevProps, nextProps) => {
-    // Enhanced comparison function to prevent unnecessary re-renders
+    // More thorough image source comparison
+    const prevImage = prevProps.imageSource;
+    const nextImage = nextProps.imageSource;
+    
+    const imageSourceEqual = 
+      prevImage === nextImage ||
+      (prevImage?.uri === nextImage?.uri && 
+       prevImage?.testUri === nextImage?.testUri);
+    
     return (
       prevProps.item.id === nextProps.item.id &&
       prevProps.item.name === nextProps.item.name &&
       prevProps.item.price === nextProps.item.price &&
+      prevProps.item.pieces === nextProps.item.pieces &&
+      prevProps.item.stock_quantity === nextProps.item.stock_quantity &&
       prevProps.currentQuantity === nextProps.currentQuantity &&
-      prevProps.imageSource === nextProps.imageSource &&
-      prevProps.item.stock_quantity === nextProps.item.stock_quantity
+      imageSourceEqual &&
+      prevProps.onUpdateQuantity === nextProps.onUpdateQuantity
     );
   });
-
-  // Pre-processed image sources to avoid parsing in render
-  const [processedImageSources, setProcessedImageSources] = React.useState<{[itemId: number]: any}>({});
-
-  // Process images when items change
-  React.useEffect(() => {
-    const processImages = () => {
-      const processed: {[itemId: number]: any} = {};
-      
-      items.forEach(item => {
-        let imageSource = require('../../assets/images/sellsnap_icon.png');
-        if (item.image) {
-          try {
-            if (typeof item.image === 'object' && item.image.uri) {
-              imageSource = { uri: item.image.uri };
-            } else if (typeof item.image === 'string' && item.image.startsWith('{')) {
-              const parsedImage = JSON.parse(item.image);
-              if (parsedImage && parsedImage.uri) {
-                imageSource = { uri: parsedImage.uri };
-              }
-            } else if (typeof item.image === 'string' && (item.image.startsWith('file://') || item.image.startsWith('http'))) {
-              imageSource = { uri: item.image };
-            }
-          } catch (error) {
-            console.log('Using default image for item:', item.name);
-          }
-        }
-        processed[item.id] = imageSource;
-      });
-      
-      setProcessedImageSources(processed);
-    };
-
-    processImages();
-  }, [items]); // Only re-process when items actually change
 
   // Enhanced image source cache with better management
   const imageSourceCache = React.useMemo(() => new Map<string, any>(), []);
   
-  // Create a stable cache key for items
-  const getCacheKey = React.useCallback((itemId: number, imageData: any) => {
-    return `${itemId}_${typeof imageData === 'string' ? imageData.slice(0, 50) : JSON.stringify(imageData).slice(0, 50)}`;
-  }, []);
-
   // Memoized function to parse and cache image source with better key management
   const parseImageSource = React.useCallback((itemId: number, imageData: any) => {
-    const cacheKey = getCacheKey(itemId, imageData);
+    // Create a stable cache key
+    const cacheKey = `${itemId}_${typeof imageData === 'string' ? imageData.slice(0, 50) : JSON.stringify(imageData).slice(0, 50)}`;
     
     // Check if we already have this image cached
     if (imageSourceCache.has(cacheKey)) {
@@ -1051,7 +1063,16 @@ export default function HomeScreen() {
     // Cache the parsed image source
     imageSourceCache.set(cacheKey, imageSource);
     return imageSource;
-  }, [imageSourceCache, getCacheKey]);
+  }, [imageSourceCache]);
+
+  // Memoized image sources map to prevent re-parsing on every render
+  const memoizedImageSources = React.useMemo(() => {
+    const imageMap = new Map();
+    items.forEach(item => {
+      imageMap.set(item.id, parseImageSource(item.id, item.image));
+    });
+    return imageMap;
+  }, [items, parseImageSource]);
 
   const StartMovementView = React.memo(() => {
     if (showItems && selectedCustomer) {
@@ -1066,22 +1087,24 @@ export default function HomeScreen() {
           <FlatList
             data={availableItemsForSale}
             numColumns={3}
-            keyExtractor={item => `sale-item-${item.id}`} // More specific key
-            extraData={`${Object.keys(currentSaleItems).join('-')}`} // More stable extraData
-            removeClippedSubviews={true} // Performance optimization
-            maxToRenderPerBatch={9} // Render 3 rows at a time (3x3)
-            windowSize={10} // Keep more items in memory
+            keyExtractor={item => `sale-item-${item.id}`}
+            extraData={Object.keys(currentSaleItems).length} // Only re-render when items are added/removed
+            removeClippedSubviews={true}
+            maxToRenderPerBatch={9}
+            windowSize={10}
+            getItemLayout={(data, index) => (
+              {length: 120, offset: 120 * Math.floor(index / 3), index}
+            )}
             renderItem={({ item }) => {
-              const imageSource = processedImageSources[item.id] || require('../../assets/images/sellsnap_icon.png');
+              const imageSource = memoizedImageSources.get(item.id);
               const currentQuantity = currentSaleItems[item.id] || 0;
 
               return (
                 <SaleItemCard
-                  key={`card-${item.id}`} // Stable key
                   item={item}
                   imageSource={imageSource}
                   currentQuantity={currentQuantity}
-                  onUpdateQuantity={updateSaleItemQuantity}
+                  onUpdateQuantity={stableUpdateQuantity}
                 />
               );
             }}
@@ -1132,7 +1155,7 @@ export default function HomeScreen() {
               <Text style={styles.emptyText}>لا توجد عملاء</Text>
               <Text style={styles.emptyText}>يرجى إضافة عملاء من قسم إدارة العملاء أولاً</Text>
               <TouchableOpacity 
-                style={styles.mainButton} 
+                style={[styles.backButton, styles.modernAddButton]} 
                 onPress={() => setCurrentView('customer_management')}
               >
                 <Text style={styles.buttonText}>انتقل لإدارة العملاء</Text>
@@ -1152,6 +1175,60 @@ export default function HomeScreen() {
     );
   });
 
+  // Memoized display item component to prevent image re-rendering
+  const DisplayItemCard = React.memo(({ item, isSelected, onToggle, imageSource }: {
+    item: Item;
+    isSelected: boolean;
+    onToggle: () => void;
+    imageSource: any;
+  }) => {
+
+    return (
+      <TouchableOpacity
+        style={[
+          styles.displayItemCard,
+          isSelected && styles.selectedDisplayItem
+        ]}
+        onPress={onToggle}
+      >
+        <Image 
+          source={imageSource} 
+          style={styles.displayItemImage} 
+          fadeDuration={0}
+          resizeMode="contain"
+        />
+        <View style={styles.displayItemDetails}>
+          <Text style={styles.displayItemName}>{item.name}</Text>
+          <Text style={styles.displayItemPrice}>{item.price} شيكل</Text>
+          <Text style={styles.displayItemPieces}>{item.pieces || 1} قطعة</Text>
+        </View>
+        
+        {isSelected && (
+          <View style={styles.selectionIndicator}>
+            <Text style={styles.selectionIcon}>✓</Text>
+          </View>
+        )}
+      </TouchableOpacity>
+    );
+  }, (prevProps, nextProps) => {
+    // More thorough image source comparison
+    const prevImage = prevProps.imageSource;
+    const nextImage = nextProps.imageSource;
+    
+    const imageSourceEqual = 
+      prevImage === nextImage ||
+      (prevImage?.uri === nextImage?.uri);
+    
+    return (
+      prevProps.item.id === nextProps.item.id &&
+      prevProps.item.name === nextProps.item.name &&
+      prevProps.item.price === nextProps.item.price &&
+      prevProps.item.pieces === nextProps.item.pieces &&
+      prevProps.isSelected === nextProps.isSelected &&
+      imageSourceEqual
+    );
+  });
+
   const ManageDisplayView = React.memo(() => {
     return (
       <View style={styles.container}>
@@ -1162,49 +1239,18 @@ export default function HomeScreen() {
         data={items}
         numColumns={2}
         keyExtractor={item => item.id.toString()}
+        extraData={`${Object.keys(displayItems).length}`} // Convert to string for stability
         renderItem={({ item }) => {
-          // Parse the image data if it exists
-          let imageSource = require('../../assets/images/sellsnap_icon.png');
-          if (item.image) {
-            try {
-              if (typeof item.image === 'object' && item.image.uri) {
-                imageSource = { uri: item.image.uri };
-              } else if (typeof item.image === 'string' && item.image.startsWith('{')) {
-                const parsedImage = JSON.parse(item.image);
-                if (parsedImage && parsedImage.uri) {
-                  imageSource = { uri: parsedImage.uri };
-                }
-              } else if (typeof item.image === 'string' && (item.image.startsWith('file://') || item.image.startsWith('http'))) {
-                imageSource = { uri: item.image };
-              }
-            } catch (error) {
-              console.log('Using default image for item:', item.name);
-            }
-          }
-
+          const imageSource = memoizedImageSources.get(item.id);
           const isSelected = displayItems[item.id] || false;
           
           return (
-            <TouchableOpacity
-              style={[
-                styles.displayItemCard,
-                isSelected && styles.selectedDisplayItem
-              ]}
-              onPress={() => toggleDisplayItem(item.id)}
-            >
-              <Image source={imageSource} style={styles.displayItemImage} />
-              <View style={styles.displayItemDetails}>
-                <Text style={styles.displayItemName}>{item.name}</Text>
-                <Text style={styles.displayItemPrice}>{item.price} شيكل</Text>
-                <Text style={styles.displayItemPieces}>{item.pieces || 1} قطعة</Text>
-              </View>
-              
-              {isSelected && (
-                <View style={styles.selectionIndicator}>
-                  <Text style={styles.selectionIcon}>✓</Text>
-                </View>
-              )}
-            </TouchableOpacity>
+            <DisplayItemCard
+              item={item}
+              isSelected={isSelected}
+              onToggle={() => toggleDisplayItem(item.id)}
+              imageSource={imageSource}
+            />
           );
         }}
         contentContainerStyle={styles.displayGrid}
@@ -1225,36 +1271,22 @@ export default function HomeScreen() {
     );
   });
 
-  // Memoized render function for stock items
-  const renderStockItem = React.useCallback(({ item }: { item: Item }) => {
-    // Parse the image data if it exists - handle multiple formats
-    let imageSource = require('../../assets/images/sellsnap_icon.png');
-    if (item.image) {
-      try {
-        // First, check if it's already an object
-        if (typeof item.image === 'object' && item.image.uri) {
-          imageSource = { uri: item.image.uri };
-        } 
-        // Then check if it's a JSON string
-        else if (typeof item.image === 'string' && item.image.startsWith('{')) {
-          const parsedImage = JSON.parse(item.image);
-          if (parsedImage && parsedImage.uri) {
-            imageSource = { uri: parsedImage.uri };
-          }
-        }
-        // If it's just a URI string
-        else if (typeof item.image === 'string' && (item.image.startsWith('file://') || item.image.startsWith('http'))) {
-          imageSource = { uri: item.image };
-        }
-      } catch (error) {
-        console.log('Using default image for item:', item.name);
-        // Falls back to default image
-      }
-    }
-
+  // Memoized stock item component to prevent image re-rendering
+  const StockItemCard = React.memo(({ item, imageSource, onEdit, onDelete }: {
+    item: Item;
+    imageSource: any;
+    onEdit: () => void;
+    onDelete: () => void;
+  }) => {
+    
     return (
       <View style={styles.stockCard}>
-        <Image source={imageSource} style={styles.stockItemImage} />
+        <Image 
+          source={imageSource} 
+          style={styles.stockItemImage} 
+          fadeDuration={0}
+          resizeMode="contain"
+        />
         <View style={styles.stockItemInfo}>
           <Text style={styles.stockCardName}>{item.name}</Text>
           <Text style={styles.stockItemPrice}>السعر: {item.price} شيكل</Text>
@@ -1265,25 +1297,58 @@ export default function HomeScreen() {
         <View style={styles.stockItemActions}>
           <TouchableOpacity 
             style={[styles.actionButton, styles.editButton]}
-            onPress={() => handleEditItem(item)}
+            onPress={onEdit}
           >
             <Text style={styles.actionButtonText}>✏️</Text>
           </TouchableOpacity>
           
           <TouchableOpacity 
             style={[styles.actionButton, styles.deleteButton]}
-            onPress={() => handleDeleteItem(item)}
+            onPress={onDelete}
           >
             <Text style={styles.actionButtonText}>🗑️</Text>
           </TouchableOpacity>
         </View>
       </View>
     );
-  }, [handleEditItem, handleDeleteItem]);
+  }, (prevProps, nextProps) => {
+    // More thorough image source comparison
+    const prevImage = prevProps.imageSource;
+    const nextImage = nextProps.imageSource;
+    
+    const imageSourceEqual = 
+      prevImage === nextImage ||
+      (prevImage?.uri === nextImage?.uri);
+    
+    return (
+      prevProps.item.id === nextProps.item.id &&
+      prevProps.item.name === nextProps.item.name &&
+      prevProps.item.price === nextProps.item.price &&
+      prevProps.item.pieces === nextProps.item.pieces &&
+      prevProps.item.stock_quantity === nextProps.item.stock_quantity &&
+      imageSourceEqual
+    );
+  });
+
+  // Memoized render function for stock items
+  const renderStockItem = React.useCallback(({ item }: { item: Item }) => {
+    const imageSource = memoizedImageSources.get(item.id);
+
+    return (
+      <StockItemCard
+        item={item}
+        imageSource={imageSource}
+        onEdit={() => handleEditItem(item)}
+        onDelete={() => handleDeleteItem(item)}
+      />
+    );
+  }, [handleEditItem, handleDeleteItem, memoizedImageSources]);
 
   const StockManagementView = React.memo(() => {
+   
+    
     const handleAddItem = React.useCallback(() => {
-      console.log('Add button clicked');
+  
       setAddItemModalVisible(true);
     }, []);
 
@@ -1295,6 +1360,7 @@ export default function HomeScreen() {
           data={items}
           numColumns={2}
           keyExtractor={item => item.id.toString()}
+          extraData={`${items.length}`} // Use string for stability
           renderItem={renderStockItem}
           contentContainerStyle={styles.stockGrid}
           columnWrapperStyle={styles.stockRow}
@@ -1350,7 +1416,7 @@ export default function HomeScreen() {
               style={styles.clearAllFiltersButton}
               onPress={clearFilters}
             >
-              <Text style={styles.clearFiltersButtonText}>� مسح الفلاتر</Text>
+              <Text style={styles.clearFiltersButtonText}>� الغاء الفلاتر</Text>
             </TouchableOpacity>
             
             <TouchableOpacity 
@@ -1473,8 +1539,8 @@ export default function HomeScreen() {
       
       {/* Global Modals - Always present */}
       {/* Add New Item Modal */}
-      <Modal visible={addItemModalVisible} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
+      <Modal visible={addItemModalVisible} transparent animationType="fade">
+        <View style={styles.addItemModalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalHeader}>إضافة صنف جديد</Text>
             
@@ -1484,12 +1550,11 @@ export default function HomeScreen() {
                   source={{ uri: newItemImage.uri }} 
                   style={styles.previewImage}
                   onError={(error) => {
-                    console.log('Image display error:', error);
                     setNewItemImage(null);
                     Alert.alert('خطأ', 'فشل في عرض الصورة');
                   }}
                   onLoad={() => {
-                    console.log('Image loaded successfully');
+                  
                   }}
                 />
               ) : (
@@ -1503,6 +1568,7 @@ export default function HomeScreen() {
             <TextInput
               style={styles.input}
               placeholder="اسم الصنف"
+              placeholderTextColor="#999"
               value={newItemName}
               onChangeText={setNewItemName}
             />
@@ -1510,6 +1576,7 @@ export default function HomeScreen() {
             <TextInput
               style={styles.input}
               placeholder="السعر"
+              placeholderTextColor="#999"
               value={newItemPrice}
               onChangeText={setNewItemPrice}
               keyboardType="numeric"
@@ -1518,6 +1585,7 @@ export default function HomeScreen() {
             <TextInput
               style={styles.input}
               placeholder="عدد القطع (اختياري)"
+              placeholderTextColor="#999"
               value={newItemPieces}
               onChangeText={setNewItemPieces}
               keyboardType="numeric"
@@ -1526,6 +1594,7 @@ export default function HomeScreen() {
             <TextInput
               style={styles.input}
               placeholder="كمية المخزون"
+              placeholderTextColor="#999"
               value={newItemStockQuantity}
               onChangeText={setNewItemStockQuantity}
               keyboardType="numeric"
@@ -1533,14 +1602,14 @@ export default function HomeScreen() {
 
             <View style={styles.modalButtonsContainer}>
               <TouchableOpacity style={styles.modalAddButton} onPress={handleAddNewItem}>
-                <Text style={styles.buttonText}>إضافة الصنف</Text>
+                <Text style={styles.modalButtonText}>إضافة الصنف</Text>
               </TouchableOpacity>
               
               <TouchableOpacity 
                 style={styles.modalCancelButton} 
                 onPress={handleCancelAddItem}
               >
-                <Text style={styles.buttonText}>إلغاء</Text>
+                <Text style={styles.modalButtonText}>إلغاء</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1548,38 +1617,43 @@ export default function HomeScreen() {
       </Modal>
 
       {/* Add New Customer Modal */}
-      <Modal visible={addNewCustomerModalVisible} transparent animationType="slide">
+      <Modal visible={addNewCustomerModalVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalHeader}>إضافة عميل جديد</Text>
             <TextInput
               style={styles.input}
               placeholder="اسم العميل"
+              placeholderTextColor="#999"
               value={newCustomerName}
               onChangeText={setNewCustomerName}
             />
-            <TouchableOpacity style={styles.mainButton} onPress={handleAddCustomer}>
-              <Text style={styles.buttonText}>إضافة العميل</Text>
-            </TouchableOpacity>
-            <TouchableOpacity 
-              style={cancelButtonStyle} 
-              onPress={handleCancelAddCustomer}
-            >
-              <Text style={styles.buttonText}>إلغاء</Text>
-            </TouchableOpacity>
+            
+            <View style={styles.modalButtonsContainer}>
+              <TouchableOpacity style={styles.modalAddButton} onPress={handleAddCustomer}>
+                <Text style={styles.modalButtonText}>إضافة العميل</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={styles.modalCancelButton} 
+                onPress={handleCancelAddCustomer}
+              >
+                <Text style={styles.modalButtonText}>إلغاء</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
 
       {/* Edit Item Modal */}
-      <Modal visible={editModalVisible} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
+      <Modal visible={editModalVisible} transparent animationType="fade">
+        <View style={styles.addItemModalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalHeader}>تعديل الصنف</Text>
             
             <TextInput
               style={styles.input}
               placeholder="اسم الصنف"
+              placeholderTextColor="#999"
               value={editName}
               onChangeText={setEditName}
             />
@@ -1587,6 +1661,7 @@ export default function HomeScreen() {
             <TextInput
               style={styles.input}
               placeholder="السعر"
+              placeholderTextColor="#999"
               value={editPrice}
               onChangeText={setEditPrice}
               keyboardType="numeric"
@@ -1595,6 +1670,7 @@ export default function HomeScreen() {
             <TextInput
               style={styles.input}
               placeholder="عدد القطع"
+              placeholderTextColor="#999"
               value={editPieces}
               onChangeText={setEditPieces}
               keyboardType="numeric"
@@ -1603,6 +1679,7 @@ export default function HomeScreen() {
             <TextInput
               style={styles.input}
               placeholder="كمية المخزون"
+              placeholderTextColor="#999"
               value={editStockQuantity}
               onChangeText={setEditStockQuantity}
               keyboardType="numeric"
@@ -1610,22 +1687,22 @@ export default function HomeScreen() {
 
             <View style={styles.modalButtonsContainer}>
               <TouchableOpacity style={styles.modalAddButton} onPress={handleUpdateItem}>
-                <Text style={styles.buttonText}>حفظ التغييرات</Text>
+                <Text style={styles.modalButtonText}>حفظ التغييرات</Text>
               </TouchableOpacity>
               
               <TouchableOpacity 
                 style={styles.modalCancelButton} 
                 onPress={handleCancelEditItem}
               >
-                <Text style={styles.buttonText}>إلغاء</Text>
+                <Text style={styles.modalButtonText}>إلغاء</Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
-
+     
       {/* Delete By Date Filter Modal */}
-      <Modal visible={deleteFilterModalVisible} transparent animationType="slide">
+      <Modal visible={deleteFilterModalVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalHeader}>حذف عمليات البيع بالتاريخ</Text>
@@ -1712,7 +1789,7 @@ export default function HomeScreen() {
                 style={[styles.modalAddButton, styles.dangerButton]} 
                 onPress={handleDeleteByDateFilter}
               >
-                <Text style={styles.buttonText}>حذف العمليات</Text>
+                <Text style={styles.modalButtonText}>حذف العمليات</Text>
               </TouchableOpacity>
               
               <TouchableOpacity 
@@ -1724,7 +1801,7 @@ export default function HomeScreen() {
                   setDeleteDay('');
                 }}
               >
-                <Text style={styles.buttonText}>إلغاء</Text>
+                <Text style={styles.modalButtonText}>إلغاء</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1732,7 +1809,7 @@ export default function HomeScreen() {
       </Modal>
 
       {/* New Delete History Modal */}
-      <Modal visible={showDeleteHistoryModal} animationType="slide" transparent>
+      <Modal visible={showDeleteHistoryModal} animationType="fade" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalHeader}>حذف سجلات المبيعات بالتاريخ</Text>
@@ -1773,7 +1850,7 @@ export default function HomeScreen() {
                 style={[styles.modalAddButton, styles.dangerButton]} 
                 onPress={handleDeleteByDateFilter}
               >
-                <Text style={styles.buttonText}>حذف العمليات</Text>
+                <Text style={styles.modalButtonText}>حذف العمليات</Text>
               </TouchableOpacity>
               
               <TouchableOpacity 
@@ -1785,7 +1862,7 @@ export default function HomeScreen() {
                   setDeleteDateDay('');
                 }}
               >
-                <Text style={styles.buttonText}>إلغاء</Text>
+                <Text style={styles.modalButtonText}>إلغاء</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1793,7 +1870,7 @@ export default function HomeScreen() {
       </Modal>
 
       {/* Date Filter Modal */}
-      <Modal visible={showDateFilterModal} animationType="slide" transparent>
+      <Modal visible={showDateFilterModal} animationType="fade" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.dateFilterModalContent}>
             <Text style={styles.modalHeader}>فلتر بالتاريخ</Text>
@@ -1901,14 +1978,14 @@ export default function HomeScreen() {
                   applyFilters();
                 }}
               >
-                <Text style={styles.buttonText}>تطبيق الفلتر</Text>
+                <Text style={styles.modalButtonText}>تطبيق الفلتر</Text>
               </TouchableOpacity>
               
               <TouchableOpacity 
                 style={styles.modalCancelButton} 
                 onPress={() => setShowDateFilterModal(false)}
               >
-                <Text style={styles.buttonText}>إلغاء</Text>
+                <Text style={styles.modalButtonText}>إلغاء</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -2033,38 +2110,57 @@ const styles = StyleSheet.create({
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
     justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 40,
+  },
+  addItemModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'flex-start',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 60, // More top padding to position higher
   },
   modalContent: {
-    backgroundColor: 'white',
-    borderRadius: 15,
+    backgroundColor: '#ffffff',
+    borderRadius: 20,
     padding: 20,
-    width: '90%',
-    maxHeight: '80%',
+    width: '100%',
+    maxWidth: 380,
+    maxHeight: '85%',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 5,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    elevation: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
   },
   modalHeader: {
     fontSize: 20,
-    fontWeight: 'bold',
+    fontWeight: '600',
     textAlign: 'center',
     marginBottom: 20,
-    color: '#333',
+    color: '#000000ff',
+    lineHeight: 28,
+    textDecorationStyle: 'double',
   },
   input: {
     borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
+    borderColor: '#e1e5e9',
+    borderRadius: 10,
     paddingHorizontal: 15,
     paddingVertical: 12,
     fontSize: 16,
-    backgroundColor: '#fff',
+    backgroundColor: '#f8f9fa',
     marginBottom: 15,
+    textAlign: 'right',
+    color: '#2c3e50',
+    fontWeight: '400',
+    lineHeight: 20,
   },
   customerItem: {
     backgroundColor: '#fff',
@@ -2278,25 +2374,26 @@ const styles = StyleSheet.create({
   saleItemCard: {
     backgroundColor: '#fff',
     borderRadius: 15,
-    padding: 10, // Slightly reduced padding
-    margin: 6,
-    flex: 0.31, // Approximately 1/3 width minus margins
-    aspectRatio: 0.95, // Adjusted for better image fit
+    padding: 12, // Increased padding
+    margin: 4, // Reduced margin to fit larger cards
+    width: '32%', // Increased width from 30% to 32%
+    aspectRatio: 0.85, // Reduced aspect ratio to make cards taller
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.12, // Slightly reduced shadow
+    shadowOpacity: 0.12,
     shadowRadius: 3,
     elevation: 3,
     alignItems: 'center',
-    justifyContent: 'space-between', // Better distribution of content
+    justifyContent: 'space-between',
   },
   saleItemRow: {
-    justifyContent: 'space-between',
-    paddingHorizontal: 6,
+    justifyContent: 'space-between', // Changed from space-around for better distribution
+    paddingHorizontal: 4, // Reduced padding to accommodate larger cards
   },
   saleGrid: {
     paddingBottom: 20,
     paddingTop: 10,
+    paddingHorizontal: 8, // Added horizontal padding for better spacing
   },
   saleItemImage: {
    // width: '100%', // Remove fixed width
@@ -2348,20 +2445,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#f8f9fa',
-    borderRadius: 8, // Slightly reduced
-    padding: 4, // Reduced padding
-    marginTop: 4, // Reduced margin
+    borderRadius: 8,
+    padding: 8, // Increased padding for better touch area
+    marginTop: 4,
     width: '100%',
     flex: 0, // Don't flex, use minimum space
+    minHeight: 56, // Ensure minimum height for touch area
   },
   saleQuantityButton: {
     backgroundColor: '#007AFF',
-    borderRadius: 8, // Increased from 6
-    width: 32, // Increased from 26
-    height: 32, // Increased from 26
+    borderRadius: 8,
+    width: 44, // iOS minimum touch target size
+    height: 44, // iOS minimum touch target size
     justifyContent: 'center',
     alignItems: 'center',
-    marginHorizontal: 6, // Increased from 4
+    marginHorizontal: 6,
+    elevation: 2, // Android shadow
+    shadowColor: '#000', // iOS shadow
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
   },
   saleQuantityButtonText: {
     color: '#fff',
@@ -2384,9 +2487,14 @@ const styles = StyleSheet.create({
   },
   displayGrid: {
     paddingVertical: 10,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
   },
   displayRow: {
     justifyContent: 'space-around',
+    paddingHorizontal: 5,
   },
   stockGrid: {
     paddingVertical: 10,
@@ -2423,22 +2531,61 @@ const styles = StyleSheet.create({
   },
   modalButtonsContainer: {
     flexDirection: 'row',
-    justifyContent: 'space-around',
+    justifyContent: 'space-between',
     marginTop: 20,
+    gap: 10,
   },
   modalAddButton: {
-    backgroundColor: '#34C759',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 8,
-    flex: 0.45,
+    backgroundColor: '#007AFF',
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+    flex: 1,
+    alignItems: 'center',
+    shadowColor: '#007AFF',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
   },
   modalCancelButton: {
-    backgroundColor: '#FF3B30',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 8,
-    flex: 0.45,
+    backgroundColor: '#8E8E93',
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+    flex: 1,
+    alignItems: 'center',
+    shadowColor: '#8E8E93',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  modalButtonText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '600',
+    textAlign: 'center',
+    letterSpacing: 0.3,
+  },
+  // Additional modern input style
+  modernInput: {
+    borderWidth: 1.5,
+    borderColor: '#e1e5e9',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 16,
+    backgroundColor: '#f8f9fa',
+    marginBottom: 16,
+    textAlign: 'right',
+    color: '#2c3e50',
+    fontWeight: '500',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
   },
   // Sale screen additional styles
   totalContainer: {
@@ -2483,16 +2630,17 @@ const styles = StyleSheet.create({
   // Display item styles
   displayItemCard: {
     backgroundColor: '#fff',
-    borderRadius: 15,
-    padding: 12,
+    borderRadius: 12,
+    padding: 15,
     margin: 8,
     flex: 0.48,
-    aspectRatio: 0.85, // Make cards taller to accommodate more content
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.12,
-    shadowRadius: 5,
-    elevation: 4,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   selectedDisplayItem: {
     backgroundColor: '#e3f2fd',
@@ -2501,14 +2649,17 @@ const styles = StyleSheet.create({
     transform: [{ scale: 0.98 }],
   },
   displayItemImage: {
-    width: '100%',
-    height: 100,
-    borderRadius: 12,
+    // width: '100%', // Remove fixed width
+    // height: '50%', // Remove fixed height
+    borderRadius: 8,
     marginBottom: 8,
-    resizeMode: 'contain', // Changed from cover to contain
+    resizeMode: 'contain',
     backgroundColor: '#f8f9fa', // Updated background color
-    alignSelf: 'center', // Center the image
-    overflow: 'hidden', // Clip overflow
+    // Use aspectRatio and alignSelf for dynamic sizing
+    aspectRatio: 1, // Keeps image square, you can adjust as needed
+    alignSelf: 'center',
+    width: undefined, // Let image size be determined by source
+    height: 100, // Or set a max height
   },
   displayItemDetails: {
     flex: 1,
@@ -2637,32 +2788,34 @@ const styles = StyleSheet.create({
   // Image picker styles
   imagePickerButton: {
     borderWidth: 2,
-    borderColor: '#ddd',
+    borderColor: '#e1e5e9',
     borderStyle: 'dashed',
-    borderRadius: 8,
+    borderRadius: 16,
     padding: 20,
-    marginBottom: 15,
+    marginBottom: 16,
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 120,
+    minHeight: 100,
+    backgroundColor: '#f8f9fa',
   },
   previewImage: {
     width: '100%',
-    height: 100,
-    borderRadius: 8,
+    height: 80,
+    borderRadius: 12,
   },
   imagePlaceholder: {
     alignItems: 'center',
     justifyContent: 'center',
   },
   imagePlaceholderText: {
-    fontSize: 40,
-    color: '#ccc',
-    marginBottom: 10,
+    fontSize: 32,
+    color: '#007AFF',
+    marginBottom: 8,
   },
   imagePlaceholderLabel: {
-    fontSize: 16,
+    fontSize: 14,
     color: '#666',
+    fontWeight: '500',
     textAlign: 'center',
   },
   
@@ -2903,18 +3056,11 @@ const styles = StyleSheet.create({
   },
   dangerButton: {
     backgroundColor: '#FF3B30',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 25,
-    alignItems: 'center',
-    justifyContent: 'center',
     shadowColor: '#FF3B30',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 3,
-    minHeight: 36,
-    minWidth: 60,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 4,
   },
   dateFilterButton: {
     backgroundColor: '#007AFF',
@@ -2955,28 +3101,27 @@ const styles = StyleSheet.create({
   },
   // Date picker modal styles
   dateFilterModalContent: {
-    backgroundColor: 'white',
-    borderRadius: 15,
-    padding: 20,
-    marginHorizontal: 10,
-    marginVertical: 50,
-    maxHeight: '80%',
-    width: '95%',
+    backgroundColor: '#ffffff',
+    borderRadius: 24,
+    padding: 24,
+    marginHorizontal: 20,
+    marginVertical: 60,
+    maxHeight: '75%',
+    width: '90%',
     alignSelf: 'center',
     shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-    elevation: 5,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
+    elevation: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
   },
   datePickerContainer: {
     flexDirection: 'row',
-    height: 280,
+    height: 240,
     marginVertical: 20,
-    gap: 8,
+    gap: 12,
   },
   datePickerColumn: {
     flex: 1,
@@ -3055,6 +3200,4 @@ const styles = StyleSheet.create({
     textShadowRadius: 2,
     marginLeft: 8,
   },
-}); 
-
-
+});
